@@ -218,6 +218,12 @@ class TUEDownloader(object):
                     continue
 
         video_title = util.escape_file(videopage_soup.title.text)
+        # DWWDD - Lecture DD [ab]
+        try:
+          course_code, lecture = video_title.split(" - ", 1)
+          video_title = os.path.join(course_code, lecture)
+        except:
+            pass
         video_dir = os.path.join(video_root, video_title)
         if not os.path.isdir(video_dir):
             os.makedirs(video_dir)
