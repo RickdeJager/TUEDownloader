@@ -1,6 +1,6 @@
 import re
-import subprocess
 import ffmpeg
+import tempfile
 
 def detect_crop(filepath):
     # TODO: The below command only check the first second to determine the crop.
@@ -10,25 +10,34 @@ def detect_crop(filepath):
     # 4:3 slides on a 16:9 stream, leaving black bars all over the place
 
     # FFMPEG uses stderr to print the revevant info
-    std_err_dump = subprocess.check_output([
-        "ffmpeg",
-        "-i",
-        filepath,
-        "-t",
-        "1",
-        "-vf",
-        "cropdetect",
-        "-f",
-        "null",
-        "-",
-     ],
-     stderr=subprocess.STDOUT)
+
+    throwaway_file = tempfile.NamedTemporaryFile()
+
+    _, std_err_dump = ffmpeg.input(
+                filepath, ss=1
+            ).filter(
+                'cropdetect'
+            ).output(
+                throwaway_file.name, vframes=20, format='mp4'
+            ).overwrite_output(
+            ).run(
+                capture_stdout=True,
+                capture_stderr=True
+            )
+
 
     # We're looking for the last occurrence of "crop=720:528:120:6"
-    crop_string = re.findall(b"crop=\d+:\d+:\d+:\d+", std_err_dump)[-1]
-
-    # Skip "crop=" and split the rest
-    dimensions = [int(i) for i in crop_string[5:].split(b':')]
+    crop_strings = re.findall(b"crop=\d+:\d+:\d+:\d+", std_err_dump)
+    if len(crop_strings) > 0:
+        crop_string = crop_strings[-1]
+        # Skip "crop=" and split the rest
+        dimensions = [int(i) for i in crop_string[5:].split(b':')]
+    else:
+        print("Cropdetect not working, using ffprobe to determine dimensions.")
+        # If we can't get a crop, return the videos dimensions instead
+        probe = ffmpeg.probe(filepath)
+        info = next(s for s in probe['streams'] if s['codec_type'] == 'video')
+        dimensions = [info["width"], info["height"], 0, 0]
 
     # Width, Heigth, (Top left corner)
     return dimensions
@@ -51,13 +60,17 @@ def side_by_side(cam_path, pc_path, out_path, preset='veryfast'):
     elif pc_crop[1] > cam_crop[1]:
         cam_stream = cam_stream.filter('scale', -1, pc_crop[1])
 
-    (
-        ffmpeg
-        .filter([cam_stream, pc_stream], 'hstack')
-        .output(out_path, **{'map': '1:a', 'preset': preset, 'crf': 23})
-        .global_args('-threads', '0')
-        .run()
-    )
+    ffmpeg.filter(
+        [cam_stream, pc_stream],
+        'hstack'
+    ).output(
+        out_path,
+        **{'map': '1:a', 'preset': preset, 'crf': 23, 'format': 'mp4'}
+    ).overwrite_output(
+    ).global_args(
+        '-threads',
+        '0'
+    ).run()
 
 '''
     Takes as input 2 mp4 files and returns a single mp4 file that
@@ -80,10 +93,12 @@ def diagonal(cam_path, pc_path, out_path, preset='veryfast', overlap=(0, 0)):
     # Pad the stream in the top-left corner to add a black background
     cam_padded = cam_stream.filter('pad', tw, th, 0, 0)
 
-    (
-        ffmpeg
-        .filter_([cam_padded, pc_stream], 'xstack', layout=layout)
-        .output(out_path, **{'map': '1:a', 'preset': preset, 'crf': 23})
-        .global_args('-threads', '0')
-        .run()
-    )
+    ffmpeg.filter_(
+        [cam_padded, pc_stream], 'xstack', layout=layout
+    ).output(
+        out_path, **{'map': '1:a', 'preset': preset, 'crf': 23, 'format': 'mp4'}
+    ).overwrite_output(
+    ).global_args(
+        '-threads',
+        '0'
+    ).run()
