@@ -220,28 +220,64 @@ class TUEDownloader(object):
                 except KeyError:
                     continue
 
-        video_title = util.escape_file(videopage_soup.title.text)
-        # DWWDD - Lecture DD [ab]
-        try:
-          course_code, lecture = video_title.split(" - ", 1)
-          video_title = os.path.join(course_code, lecture)
-        except:
-            pass
-        video_dir = os.path.join(video_root, video_title)
-        if not os.path.isdir(video_dir):
-            os.makedirs(video_dir)
-
         # Select which mimetype to use
+        # TODO; This only allows for 1 mime_type per lecture,
+        # If for example, slides/screencast is recorded in another
+        # format, this won't work.
+        # However, I don't think that's a common case (exluding slide png's)
         for mime_type in self.supported_mime_types:
             if mime_type in video_urls:
                 print(f"[i] Selected mime_type: {mime_type}")
                 supported_urls = video_urls[mime_type]
                 break
 
-        # TODO; This only allows for 1 mime_type per lecture,
-        # If for example, slides/screencast is recorded in another
-        # format, this won't work.
-        # However, I don't think that's a common case (exluding slide png's)
+        # The title is expect to look like this:
+        #           DWWDD - Lecture DD [ab]
+        # We're gonna be splitting the title to get a course code 
+        # and lecture title.
+        video_title = util.escape_file(videopage_soup.title.text)
+
+        split_title = video_title.split(" - ", 1)
+        if len(split_title) == 2:
+            grandparent = split_title[0]
+            parent = split_title[1]
+        else:
+            grandparent = "" # ie, don't create a gp dir
+            parent = split_title[0]
+        #
+        # The general hierachy is shown below, 
+        # If we have more than 1 stream, we will create a lecture directory
+        #
+        # [root]
+        #   |
+        #   |---[Course Code]/                  # <--- This will be seen as the "show/series"
+        #   |        |-[Lecture X-a]/           # <--- This will be skipped
+        #   |        |       |- Lecture X-a - 0 # cam
+        #   |        |       |- Lecture X-a - 1 # slides
+        #   |        |       |- .ignore         # ignore file for media indexers
+        #   |        |-[Lecture X-a].mp4        # <--- This will be indexed
+        #
+        # root/grand parent (course code) / parent (lecture)/ video file
+
+        # If we have to download multiple files for this lecture, create a directory for it.
+        if len(supported_urls) > 1:
+            video_dir = os.path.join(video_root, grandparent, parent)
+        else:
+            video_dir = os.path.join(video_root, grandparent)
+
+        # Create all dirs on the path
+        if not os.path.isdir(video_dir):
+            os.makedirs(video_dir)
+
+        # If we're gonna merge these streams later, we shouldn't let the
+        # parts get indexed
+        if len(supported_urls) > 1 and self.merge:
+            # Make sure we aren't excluding the root dir from indexing
+            assert not os.path.samefile(video_root, video_dir)
+            # Create an empty ".ignore" file in the directory to stop indexing it.
+            ignore_file = os.path.join(video_dir, ".ignore")
+            open(ignore_file, 'w').close()
+
 
         for i, video_url in enumerate(supported_urls):
             file_name = os.path.join(video_dir, "download_{}.mp4".format(i))
@@ -267,9 +303,12 @@ class TUEDownloader(object):
                             video_url,
                             file_name)
                     )
+        output_file = os.path.join(video_root, grandparent, parent+".mp4")
+        if self.merge and len(supported_urls) == 2:
+            # Check if the output file already exists, if so, return
+            if os.path.isfile(output_file):
+                return video_dir
 
-        output_file = os.path.join(video_dir, "merged.mp4")
-        if self.merge and len(supported_urls) == 2 and not os.path.isfile(output_file):
             input_files = [os.path.join(video_dir, "download_{}.mp4".format(i)) for i in [0, 1]]
             tmp_output_file = os.path.join(video_dir, "merged.mp4.part")
             # TODO
